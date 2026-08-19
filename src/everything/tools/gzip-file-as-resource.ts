@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { lookup } from "node:dns/promises";
+import { BlockList, isIP } from "node:net";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CallToolResult, Resource } from "@modelcontextprotocol/sdk/types.js";
 import { gzipSync } from "node:zlib";
@@ -17,18 +19,36 @@ const GZIP_MAX_FETCH_TIME_MILLIS = Number(
   process.env.GZIP_MAX_FETCH_TIME_MILLIS ?? String(30 * 1000)
 );
 
-// Comma-separated list of allowed domains. Empty means all domains are allowed.
+// Comma-separated list of allowed domains. Empty disables remote fetching.
 const GZIP_ALLOWED_DOMAINS = (process.env.GZIP_ALLOWED_DOMAINS ?? "")
   .split(",")
   .map((d) => d.trim().toLowerCase())
   .filter((d) => d.length > 0);
+
+const GZIP_MAX_REDIRECTS = 5;
+const BLOCKED_ADDRESS_RANGES = new BlockList();
+
+BLOCKED_ADDRESS_RANGES.addSubnet("0.0.0.0", 8, "ipv4");
+BLOCKED_ADDRESS_RANGES.addSubnet("10.0.0.0", 8, "ipv4");
+BLOCKED_ADDRESS_RANGES.addSubnet("100.64.0.0", 10, "ipv4");
+BLOCKED_ADDRESS_RANGES.addSubnet("127.0.0.0", 8, "ipv4");
+BLOCKED_ADDRESS_RANGES.addSubnet("169.254.0.0", 16, "ipv4");
+BLOCKED_ADDRESS_RANGES.addSubnet("172.16.0.0", 12, "ipv4");
+BLOCKED_ADDRESS_RANGES.addSubnet("192.168.0.0", 16, "ipv4");
+BLOCKED_ADDRESS_RANGES.addSubnet("198.18.0.0", 15, "ipv4");
+BLOCKED_ADDRESS_RANGES.addSubnet("::", 128, "ipv6");
+BLOCKED_ADDRESS_RANGES.addSubnet("::1", 128, "ipv6");
+BLOCKED_ADDRESS_RANGES.addSubnet("fc00::", 7, "ipv6");
+BLOCKED_ADDRESS_RANGES.addSubnet("fe80::", 10, "ipv6");
 
 // Tool input schema
 const GZipFileAsResourceSchema = z.object({
   name: z.string().describe("Name of the output file").default("README.md.gz"),
   data: z
     .url()
-    .describe("URL or data URI of the file content to compress")
+    .describe(
+      "Data URI or HTTPS URL of the file content to compress. Remote URLs must match GZIP_ALLOWED_DOMAINS."
+    )
     .default(
       "https://raw.githubusercontent.com/modelcontextprotocol/servers/refs/heads/main/README.md"
     ),
@@ -128,7 +148,7 @@ export const registerGZipFileAsResourceTool = (server: McpServer) => {
 /**
  * Validates a given data URI to ensure it follows the appropriate protocols and rules.
  *
- * @param {string} dataUri - The data URI to validate. Must be an HTTP, HTTPS, or data protocol URL. If a domain is provided, it must match the allowed domains list if applicable.
+ * @param {string} dataUri - The URI to validate. Must be a data URI or an allowlisted HTTPS URL.
  * @return {URL} The validated and parsed URL object.
  * @throws {Error} If the data URI does not use a supported protocol or does not meet allowed domains criteria.
  */
@@ -136,25 +156,26 @@ function validateDataURI(dataUri: string): URL {
   // Validate Inputs
   const url = new URL(dataUri);
   try {
-    if (
-      url.protocol !== "http:" &&
-      url.protocol !== "https:" &&
-      url.protocol !== "data:"
-    ) {
+    if (url.protocol !== "https:" && url.protocol !== "data:") {
       throw new Error(
-        `Unsupported URL protocol for ${dataUri}. Only http, https, and data URLs are supported.`
+        `Unsupported URL protocol for ${dataUri}. Only https and data URLs are supported.`
       );
     }
-    if (
-      GZIP_ALLOWED_DOMAINS.length > 0 &&
-      (url.protocol === "http:" || url.protocol === "https:")
-    ) {
+    if (url.protocol === "https:") {
       const domain = url.hostname;
-      const domainAllowed = GZIP_ALLOWED_DOMAINS.some((allowedDomain) => {
-        return domain === allowedDomain || domain.endsWith(`.${allowedDomain}`);
-      });
-      if (!domainAllowed) {
+      if (GZIP_ALLOWED_DOMAINS.length === 0) {
+        throw new Error(
+          "Remote fetches are disabled unless GZIP_ALLOWED_DOMAINS is configured."
+        );
+      }
+      if (isLocalHostname(domain)) {
+        throw new Error(`Host ${domain} is not allowed.`);
+      }
+      if (!isDomainAllowed(domain)) {
         throw new Error(`Domain ${domain} is not in the allowed domains list.`);
+      }
+      if (isBlockedAddress(domain)) {
+        throw new Error(`Host ${domain} resolves to a blocked address.`);
       }
     }
   } catch (error) {
@@ -165,6 +186,67 @@ function validateDataURI(dataUri: string): URL {
     );
   }
   return url;
+}
+
+function isDomainAllowed(domain: string): boolean {
+  const normalizedDomain = domain.toLowerCase();
+  return GZIP_ALLOWED_DOMAINS.some((allowedDomain) => {
+    return (
+      normalizedDomain === allowedDomain ||
+      normalizedDomain.endsWith(`.${allowedDomain}`)
+    );
+  });
+}
+
+function isLocalHostname(hostname: string): boolean {
+  const normalizedHostname = hostname.toLowerCase();
+  return (
+    normalizedHostname === "localhost" ||
+    normalizedHostname.endsWith(".localhost")
+  );
+}
+
+function isBlockedAddress(address: string): boolean {
+  const mappedIpv4Prefix = "::ffff:";
+  if (address.toLowerCase().startsWith(mappedIpv4Prefix)) {
+    return isBlockedAddress(address.slice(mappedIpv4Prefix.length));
+  }
+
+  const addressType = isIP(address);
+  if (addressType === 4) {
+    return BLOCKED_ADDRESS_RANGES.check(address, "ipv4");
+  }
+  if (addressType === 6) {
+    return BLOCKED_ADDRESS_RANGES.check(address, "ipv6");
+  }
+  return false;
+}
+
+async function validateResolvedAddress(url: URL): Promise<void> {
+  if (url.protocol !== "https:") {
+    return;
+  }
+
+  let resolvedAddresses: Awaited<ReturnType<typeof lookup>>;
+  try {
+    resolvedAddresses = await lookup(url.hostname, { all: true, verbatim: true });
+  } catch (error) {
+    throw new Error(
+      `Unable to resolve ${url.hostname}: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
+
+  if (!resolvedAddresses.length) {
+    throw new Error(`Unable to resolve ${url.hostname}`);
+  }
+
+  for (const { address } of resolvedAddresses) {
+    if (isBlockedAddress(address)) {
+      throw new Error(`Host ${url.hostname} resolves to a blocked address.`);
+    }
+  }
 }
 
 /**
@@ -191,57 +273,84 @@ async function fetchSafely(
   );
 
   try {
-    // Fetch the data
-    const response = await fetch(url, { signal: controller.signal });
-    if (!response.body) {
-      throw new Error("No response body");
-    }
+    let currentUrl = new URL(url);
+    for (let redirectCount = 0; redirectCount <= GZIP_MAX_REDIRECTS; redirectCount++) {
+      await validateResolvedAddress(currentUrl);
 
-    // Note: we can't trust the Content-Length header: a malicious or clumsy server could return much more data than advertised.
-    // We check it here for early bail-out, but we still need to monitor actual bytes read below.
-    const contentLengthHeader = response.headers.get("content-length");
-    if (contentLengthHeader != null) {
-      const contentLength = parseInt(contentLengthHeader, 10);
-      if (contentLength > maxBytes) {
-        throw new Error(
-          `Content-Length for ${url} exceeds max of ${maxBytes}: ${contentLength}`
-        );
-      }
-    }
-
-    // Read the fetched data from the response body
-    const reader = response.body.getReader();
-    const chunks = [];
-    let totalSize = 0;
-
-    // Read chunks until done
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        totalSize += value.length;
-
-        if (totalSize > maxBytes) {
-          reader.cancel();
-          throw new Error(`Response from ${url} exceeds ${maxBytes} bytes`);
+      // Fetch the data
+      const response = await fetch(currentUrl, {
+        signal: controller.signal,
+        redirect: "manual",
+      });
+      if ([301, 302, 303, 307, 308].includes(response.status)) {
+        if (redirectCount === GZIP_MAX_REDIRECTS) {
+          throw new Error(`Too many redirects while fetching ${url}`);
         }
 
-        chunks.push(value);
+        const location = response.headers.get("location");
+        if (!location) {
+          throw new Error(`Redirect response from ${currentUrl} did not include a location header`);
+        }
+
+        currentUrl = validateDataURI(new URL(location, currentUrl).toString());
+        continue;
       }
-    } finally {
-      reader.releaseLock();
-    }
 
-    // Combine chunks into a single buffer
-    const buffer = new Uint8Array(totalSize);
-    let offset = 0;
-    for (const chunk of chunks) {
-      buffer.set(chunk, offset);
-      offset += chunk.length;
-    }
+      if (!response.ok) {
+        throw new Error(`Failed to fetch ${currentUrl}: ${response.status} ${response.statusText}`);
+      }
 
-    return buffer.buffer;
+      if (!response.body) {
+        throw new Error("No response body");
+      }
+
+      // Note: we can't trust the Content-Length header: a malicious or clumsy server could return much more data than advertised.
+      // We check it here for early bail-out, but we still need to monitor actual bytes read below.
+      const contentLengthHeader = response.headers.get("content-length");
+      if (contentLengthHeader != null) {
+        const contentLength = parseInt(contentLengthHeader, 10);
+        if (contentLength > maxBytes) {
+          throw new Error(
+            `Content-Length for ${currentUrl} exceeds max of ${maxBytes}: ${contentLength}`
+          );
+        }
+      }
+
+      // Read the fetched data from the response body
+      const reader = response.body.getReader();
+      const chunks = [];
+      let totalSize = 0;
+
+      // Read chunks until done
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          totalSize += value.length;
+
+          if (totalSize > maxBytes) {
+            reader.cancel();
+            throw new Error(`Response from ${currentUrl} exceeds ${maxBytes} bytes`);
+          }
+
+          chunks.push(value);
+        }
+      } finally {
+        reader.releaseLock();
+      }
+
+      // Combine chunks into a single buffer
+      const buffer = new Uint8Array(totalSize);
+      let offset = 0;
+      for (const chunk of chunks) {
+        buffer.set(chunk, offset);
+        offset += chunk.length;
+      }
+
+      return buffer.buffer;
+    }
+    throw new Error(`Too many redirects while fetching ${url}`);
   } finally {
     clearTimeout(timeout);
   }

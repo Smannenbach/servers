@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { registerEchoTool, EchoSchema } from '../tools/echo.js';
 import { registerGetSumTool } from '../tools/get-sum.js';
-import { registerGetEnvTool } from '../tools/get-env.js';
 import { registerGetTinyImageTool, MCP_TINY_IMAGE } from '../tools/get-tiny-image.js';
 import { registerGetStructuredContentTool } from '../tools/get-structured-content.js';
 import { registerGetAnnotatedMessageTool } from '../tools/get-annotated-message.js';
@@ -152,35 +151,6 @@ describe('Tools', () => {
       await expect(handler({})).rejects.toThrow();
       await expect(handler({ a: 'not a number', b: 5 })).rejects.toThrow();
       await expect(handler({ a: 5 })).rejects.toThrow();
-    });
-  });
-
-  describe('get-env', () => {
-    it('should return all environment variables as JSON', async () => {
-      const { mockServer, handlers } = createMockServer();
-      registerGetEnvTool(mockServer);
-
-      const handler = handlers.get('get-env')!;
-      process.env.TEST_VAR_EVERYTHING = 'test_value';
-      const result = await handler({});
-
-      expect(result.content).toHaveLength(1);
-      expect(result.content[0].type).toBe('text');
-
-      const envJson = JSON.parse(result.content[0].text);
-      expect(envJson.TEST_VAR_EVERYTHING).toBe('test_value');
-
-      delete process.env.TEST_VAR_EVERYTHING;
-    });
-
-    it('should return valid JSON', async () => {
-      const { mockServer, handlers } = createMockServer();
-      registerGetEnvTool(mockServer);
-
-      const handler = handlers.get('get-env')!;
-      const result = await handler({});
-
-      expect(() => JSON.parse(result.content[0].text)).not.toThrow();
     });
   });
 
@@ -1216,6 +1186,26 @@ describe('Tools', () => {
       await expect(
         handler!({ name: 'test.gz', data: 'ftp://example.com/file.txt', outputType: 'resource' })
       ).rejects.toThrow('Unsupported URL protocol');
+    });
+
+    it('should reject remote URLs when no allowlist is configured', async () => {
+      const mockServer = {
+        registerTool: vi.fn(),
+        registerResource: vi.fn(),
+      } as unknown as McpServer;
+
+      let handler: Function | null = null;
+      (mockServer.registerTool as any).mockImplementation(
+        (_name: string, _config: any, h: Function) => {
+          handler = h;
+        }
+      );
+
+      registerGZipFileAsResourceTool(mockServer);
+
+      await expect(
+        handler!({ name: 'test.gz', data: 'https://example.com/file.txt', outputType: 'resource' })
+      ).rejects.toThrow('Remote fetches are disabled unless GZIP_ALLOWED_DOMAINS is configured');
     });
   });
 });

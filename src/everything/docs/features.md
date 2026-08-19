@@ -11,11 +11,10 @@
 
 - `echo` (tools/echo.ts): Echoes the provided `message: string`. Uses Zod to validate inputs.
 - `get-annotated-message` (tools/get-annotated-message.ts): Returns a `text` message annotated with `priority` and `audience` based on `messageType` (`error`, `success`, or `debug`); can optionally include an annotated `image`.
-- `get-env` (tools/get-env.ts): Returns all environment variables from the running process as pretty-printed JSON text.
 - `get-resource-links` (tools/get-resource-links.ts): Returns an intro `text` block followed by multiple `resource_link` items. For a requested `count` (1–10), alternates between dynamic Text and Blob resources using URIs from `resources/templates.ts`.
 - `get-resource-reference` (tools/get-resource-reference.ts): Accepts `resourceType` (`text` or `blob`) and `resourceId` (positive integer). Returns a concrete `resource` content block (with its `uri`, `mimeType`, and data) with surrounding explanatory `text`.
 - `get-roots-list` (tools/get-roots-list.ts): Returns the last list of roots sent by the client.
-- `gzip-file-as-resource` (tools/gzip-file-as-resource.ts): Accepts a `name` and `data` (URL or data URI), fetches the data subject to size/time/domain constraints, compresses it, registers it as a session resource at `demo://resource/session/<name>` with `mimeType: application/gzip`, and returns either a `resource_link` (default) or an inline `resource` depending on `outputType`.
+- `gzip-file-as-resource` (tools/gzip-file-as-resource.ts): Accepts a `name` and `data` (data URI by default, or an allowlisted HTTPS URL), fetches the data subject to size/time/domain constraints, compresses it, registers it as a session resource at `demo://resource/session/<name>` with `mimeType: application/gzip`, and returns either a `resource_link` (default) or an inline `resource` depending on `outputType`.
 - `get-structured-content` (tools/get-structured-content.ts): Demonstrates structured responses. Accepts `location` input and returns both backward‑compatible `content` (a `text` block containing JSON) and `structuredContent` validated by an `outputSchema` (temperature, conditions, humidity).
 - `get-sum` (tools/get-sum.ts): For two numbers `a` and `b` calculates and returns their sum. Uses Zod to validate inputs.
 - `get-tiny-image` (tools/get-tiny-image.ts): Returns a tiny PNG MCP logo as an `image` content item with brief descriptive text before and after.

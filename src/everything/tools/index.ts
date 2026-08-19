@@ -1,7 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerGetAnnotatedMessageTool } from "./get-annotated-message.js";
 import { registerEchoTool } from "./echo.js";
-import { registerGetEnvTool } from "./get-env.js";
 import { registerGetResourceLinksTool } from "./get-resource-links.js";
 import { registerGetResourceReferenceTool } from "./get-resource-reference.js";
 import { registerGetRootsListTool } from "./get-roots-list.js";
@@ -26,7 +25,6 @@ import { registerTriggerUrlElicitationTool } from "./trigger-url-elicitation.js"
 export const registerTools = (server: McpServer) => {
   registerEchoTool(server);
   registerGetAnnotatedMessageTool(server);
-  registerGetEnvTool(server);
   registerGetResourceLinksTool(server);
   registerGetResourceReferenceTool(server);
   registerGetStructuredContentTool(server);
