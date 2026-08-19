@@ -5,11 +5,13 @@ import cors from "cors";
 
 console.error("Starting SSE server...");
 
-// Express app with permissive CORS for testing with Inspector direct connect mode
+// Express app with CORS configured for testing with Inspector direct connect mode.
+// Override the allowed origin by setting the CORS_ORIGIN environment variable.
+const allowedOrigin = process.env.CORS_ORIGIN ?? false;
 const app = express();
 app.use(
   cors({
-    origin: "*", // use "*" with caution in production
+    origin: allowedOrigin,
     methods: "GET,POST",
     preflightContinue: false,
     optionsSuccessStatus: 204,
