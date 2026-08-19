@@ -227,9 +227,12 @@ async function validateResolvedAddress(url: URL): Promise<void> {
     return;
   }
 
-  let resolvedAddresses: Awaited<ReturnType<typeof lookup>>;
+  let resolvedAddresses: Array<{ address: string; family: number }>;
   try {
-    resolvedAddresses = await lookup(url.hostname, { all: true, verbatim: true });
+    resolvedAddresses = await lookup(url.hostname, {
+      all: true,
+      verbatim: true,
+    });
   } catch (error) {
     throw new Error(
       `Unable to resolve ${url.hostname}: ${
