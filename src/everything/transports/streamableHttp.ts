@@ -39,8 +39,9 @@ class InMemoryEventStore implements EventStore {
 console.log("Starting Streamable HTTP server...");
 
 // Express app with CORS configured for testing with Inspector direct connect mode.
-// Override the allowed origin by setting the CORS_ORIGIN environment variable.
-const allowedOrigin = process.env.CORS_ORIGIN ?? false;
+// Set CORS_ORIGIN env var to a specific origin (e.g. https://inspector.example.com)
+// or to "*" to restore open-wildcard access. Defaults to false (CORS disabled).
+const allowedOrigin: string | false = process.env.CORS_ORIGIN ?? false;
 const app = express();
 app.use(
   cors({
